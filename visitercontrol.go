@@ -2,6 +2,7 @@ package visitercontrol
 
 import (
 	"github.com/yudeguang/hashset"
+	"log"
 	"sync"
 	"time"
 )
@@ -99,6 +100,7 @@ func (this *visitercontrol) deleteExpired() {
 		if finished {
 			finished = false
 			this.deleteExpiredOnce()
+			this.gc()
 			finished = true
 		}
 	}
@@ -120,9 +122,49 @@ func (this *visitercontrol) deleteExpiredOnce() {
 	})
 }
 
+//把Int64转换成IP4的的字符串形式
+func (this *visitercontrol) Int64ToIp4String(ip int64) string {
+	return Int64ToIp4String(ip)
+}
+
+//IP4地址转换为Int64
+func (this *visitercontrol) Ip4StringToInt64(ip string) int64 {
+	return Ip4StringToInt64(ip)
+}
+
 //出现峰值之后，回收访问数据，减少内存占用
 func (this *visitercontrol) gc() {
 	this.lock.Lock()
 	defer this.lock.Unlock()
+	if this.needGc() {
+		curLen := len(this.visitorRecords)
+		unUsedLen := len(this.notUsedVisitorRecordsIndex.Items)
+		usedLen := curLen - unUsedLen
+		var newLen int
+		if usedLen < this.maximumNumberOfOnlineUsers {
+			newLen = this.maximumNumberOfOnlineUsers
+		} else {
+			newLen = usedLen * 2
+		}
 
+		log.Println("gc", newLen)
+	}
+}
+
+//是否需要对visitorRecords进行清理
+//如果visitorRecords数据空的太多,则需要进行清理操作
+//并且长度远大于默认在线用户数量，则需要进行GC操作
+func (this *visitercontrol) needGc() bool {
+	curLen := len(this.visitorRecords)
+	//比预期的少，我们就不回收了
+	if curLen < 2*this.maximumNumberOfOnlineUsers {
+		return false
+	}
+	unUsedLen := len(this.notUsedVisitorRecordsIndex.Items)
+	usedLen := curLen - unUsedLen
+	//未使用的太多，则需要回收
+	if usedLen*2 < unUsedLen {
+		return true
+	}
+	return false
 }
