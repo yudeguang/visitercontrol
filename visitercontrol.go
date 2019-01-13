@@ -2,7 +2,6 @@ package visitercontrol
 
 import (
 	"github.com/yudeguang/hashset"
-	"log"
 	"sync"
 	"time"
 )
@@ -58,6 +57,15 @@ func new(defaultExpiration, cleanupInterval time.Duration, maxVisitsNum, maximum
 //是否允许访问,允许访问则往访问记录中加入一条访问记录
 func (this *visitercontrol) AllowVisit(key interface{}) bool {
 	return this.add(key) == nil
+}
+
+//是否允许某IP的用户访问
+func (this *visitercontrol) AllowVisitIP(ip string) bool {
+	ipInt64 := this.Ip4StringToInt64(ip)
+	if ipInt64 == 0 {
+		return false
+	}
+	return this.AllowVisit(ipInt64)
 }
 
 //增加一条访问记录
@@ -134,7 +142,6 @@ func (this *visitercontrol) Ip4StringToInt64(ip string) int64 {
 
 //出现峰值之后，回收访问数据，减少内存占用
 func (this *visitercontrol) gc() {
-	log.Println("GC操作")
 	this.lock.Lock()
 	defer this.lock.Unlock()
 	if this.needGc() {
@@ -147,7 +154,6 @@ func (this *visitercontrol) gc() {
 		} else {
 			newLen = usedLen * 2
 		}
-		log.Println("gc", newLen)
 		//建立新缓存
 		visitorRecordsNew := make([]*circleQueueInt64, newLen)
 		for i := range visitorRecordsNew {
@@ -164,10 +170,9 @@ func (this *visitercontrol) gc() {
 			return true
 		})
 		this.visitorRecords = visitorRecordsNew
-		log.Println(this.visitorRecords, len(this.visitorRecords))
 		//重建未使用索引
 		for i := range this.visitorRecords {
-			if i > indexNew {
+			if i >= indexNew {
 				this.notUsedVisitorRecordsIndex.Add(i)
 			}
 		}
@@ -181,7 +186,7 @@ func (this *visitercontrol) needGc() bool {
 	curLen := len(this.visitorRecords)
 	unUsedLen := len(this.notUsedVisitorRecordsIndex.Items)
 	usedLen := curLen - unUsedLen
-	log.Println(curLen, unUsedLen, usedLen)
+	//log.Println("总:", curLen, "已用:", usedLen, "未使用:", unUsedLen)
 	//比预期的少，我们就不回收了
 	if curLen < 2*this.maximumNumberOfOnlineUsers {
 		return false
