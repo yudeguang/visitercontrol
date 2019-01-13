@@ -134,6 +134,7 @@ func (this *visitercontrol) Ip4StringToInt64(ip string) int64 {
 
 //出现峰值之后，回收访问数据，减少内存占用
 func (this *visitercontrol) gc() {
+	log.Println("GC操作")
 	this.lock.Lock()
 	defer this.lock.Unlock()
 	if this.needGc() {
@@ -146,7 +147,6 @@ func (this *visitercontrol) gc() {
 		} else {
 			newLen = usedLen * 2
 		}
-
 		log.Println("gc", newLen)
 	}
 }
