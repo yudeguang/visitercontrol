@@ -46,7 +46,7 @@ func new(defaultExpiration, cleanupInterval time.Duration, maxVisitsNum, maximum
 	l.notUsedVisitorRecordsIndex = hashset.NewInt()
 	l.lock = &lock
 	//初始化缓存池，减少内存分配，提升性能
-	l.visitorRecords = make([]*circleQueueInt64, 0, l.maximumNumberOfOnlineUsers)
+	l.visitorRecords = make([]*circleQueueInt64, l.maximumNumberOfOnlineUsers)
 	for i := range l.visitorRecords {
 		l.visitorRecords[i] = newCircleQueueInt64(l.maxVisitsNum)
 		l.notUsedVisitorRecordsIndex.Add(i)
@@ -149,7 +149,7 @@ func (this *visitercontrol) gc() {
 		}
 		log.Println("gc", newLen)
 		//建立新缓存
-		visitorRecordsNew := make([]*circleQueueInt64, 0, newLen)
+		visitorRecordsNew := make([]*circleQueueInt64, newLen)
 		for i := range visitorRecordsNew {
 			visitorRecordsNew[i] = newCircleQueueInt64(this.maxVisitsNum)
 		}
