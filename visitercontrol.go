@@ -148,6 +148,28 @@ func (this *visitercontrol) gc() {
 			newLen = usedLen * 2
 		}
 		log.Println("gc", newLen)
+		//建立新缓存
+		visitorRecordsNew := make([]*circleQueueInt64, 0, newLen)
+		for i := range visitorRecordsNew {
+			visitorRecordsNew[i] = newCircleQueueInt64(this.maxVisitsNum)
+		}
+		//清空未使用索引
+		this.notUsedVisitorRecordsIndex.Clear()
+		//重建索引
+		indexNew := 0
+		this.indexes.Range(func(k, v interface{}) bool {
+			indexOld := v.(int)
+			visitorRecordsNew[indexNew] = this.visitorRecords[indexOld]
+			indexNew++
+			return true
+		})
+		this.visitorRecords = visitorRecordsNew
+		//重建未使用索引
+		for i := range this.visitorRecords {
+			if i > indexNew {
+				this.notUsedVisitorRecordsIndex.Add(i)
+			}
+		}
 	}
 }
 
