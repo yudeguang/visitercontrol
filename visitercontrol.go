@@ -178,13 +178,13 @@ func (this *visitercontrol) gc() {
 //并且长度远大于默认在线用户数量，则需要进行GC操作
 func (this *visitercontrol) needGc() bool {
 	curLen := len(this.visitorRecords)
+	unUsedLen := len(this.notUsedVisitorRecordsIndex.Items)
+	usedLen := curLen - unUsedLen
+	log.Println(curLen, unUsedLen, usedLen)
 	//比预期的少，我们就不回收了
 	if curLen < 2*this.maximumNumberOfOnlineUsers {
 		return false
 	}
-	unUsedLen := len(this.notUsedVisitorRecordsIndex.Items)
-	usedLen := curLen - unUsedLen
-	log.Println(curLen, unUsedLen, usedLen)
 	//未使用的太多，则需要回收
 	if usedLen*2 < unUsedLen {
 		return true
