@@ -30,11 +30,14 @@ func new(defaultExpiration, cleanupInterval time.Duration, maxVisitsNum, default
 		panic("每次清除访问记录的时间间隔(cleanupInterval)必须小于待统计数据时间段(defaultExpiration)")
 	}
 	var l visitercontrol
+	var lock sync.RWMutex
 	l.defaultExpiration = defaultExpiration
 	l.cleanupInterval = cleanupInterval
 	l.maxVisitsNum = maxVisitsNum
 	l.defaultVisitorRecordsSize = defaultVisitorRecordsSize
 	l.notUsedVisitorRecords = hashset.NewInt()
+	l.lock = &lock
+	//初始化缓存池，减少内存分配，提升性能
 	l.visitorRecords = make([]*circleQueueInt64, 0, l.defaultVisitorRecordsSize)
 	for i := range l.visitorRecords {
 		l.visitorRecords[i] = newCircleQueueInt64(l.maxVisitsNum)
@@ -64,13 +67,18 @@ func (this *visitercontrol) add(key interface{}) (err error) {
 			for index := range this.notUsedVisitorRecords.Items {
 				this.visitorRecords[index].Push(time.Now().Add(this.defaultExpiration).UnixNano())
 				this.notUsedVisitorRecords.Remove(index)
+				//下标索引位置
+				this.indexes.Store(key, index)
 				break
 			}
+
 		} else {
 			//没有缓存可使用时
 			queue := newCircleQueueInt64(this.maxVisitsNum)
 			queue.Push(time.Now().Add(this.defaultExpiration).UnixNano())
 			this.visitorRecords = append(this.visitorRecords, queue)
+			//最后一条数据是下标索引位置
+			this.indexes.Store(key, len(this.visitorRecords)-1)
 		}
 		return nil
 	}
