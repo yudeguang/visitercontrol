@@ -184,6 +184,7 @@ func (this *visitercontrol) needGc() bool {
 	}
 	unUsedLen := len(this.notUsedVisitorRecordsIndex.Items)
 	usedLen := curLen - unUsedLen
+	log.Println(curLen, unUsedLen, usedLen)
 	//未使用的太多，则需要回收
 	if usedLen*2 < unUsedLen {
 		return true
