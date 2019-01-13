@@ -164,6 +164,7 @@ func (this *visitercontrol) gc() {
 			return true
 		})
 		this.visitorRecords = visitorRecordsNew
+		log.Println(this.visitorRecords)
 		//重建未使用索引
 		for i := range this.visitorRecords {
 			if i > indexNew {
