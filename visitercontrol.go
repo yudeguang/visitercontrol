@@ -118,14 +118,20 @@ func (this *visitercontrol) deleteExpired() {
 func (this *visitercontrol) deleteExpiredOnce() {
 	this.indexes.Range(func(k, v interface{}) bool {
 		index := v.(int)
-		this.visitorRecords[index].DeleteExpired()
-		//某用户某段时间无访问记录时，删除该用户，并把剩余的空访问记录加入缓存记录池
-		if this.visitorRecords[index].Size() == 0 {
-			this.lock.Lock()
-			defer this.lock.Unlock()
+		//防止越界出错，理论上不存在这种情况
+		if index < len(this.visitorRecords) && index >= 0 {
+			this.visitorRecords[index].DeleteExpired()
+			//某用户某段时间无访问记录时，删除该用户，并把剩余的空访问记录加入缓存记录池
+			if this.visitorRecords[index].Size() == 0 {
+				this.lock.Lock()
+				defer this.lock.Unlock()
+				this.indexes.Delete(k)
+				this.notUsedVisitorRecordsIndex.Add(index)
+			}
+		} else {
 			this.indexes.Delete(k)
-			this.notUsedVisitorRecordsIndex.Add(index)
 		}
+
 		return true
 	})
 }
