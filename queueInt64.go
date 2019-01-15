@@ -51,15 +51,25 @@ func (this *circleQueueInt64) IsEmpty() bool {
 	return this.tail == this.head
 }
 
-//判断有多少个元素
-func (this *circleQueueInt64) Size() int {
+//判断已使用多少个元素
+func (this *circleQueueInt64) UsedSize() int {
 	return (this.tail + this.maxSize - this.head) % this.maxSize
+}
+
+//判断队列中还有多少空间未使用
+func (this *circleQueueInt64) UnUsedSize() int {
+	return this.maxSize - 1 - this.UsedSize()
+}
+
+//队列总的可用空间长度
+func (this *circleQueueInt64) Len() int {
+	return this.maxSize - 1
 }
 
 //删除过期数据
 func (this *circleQueueInt64) DeleteExpired() {
 	now := time.Now().UnixNano()
-	size := this.Size()
+	size := this.UsedSize()
 	if size == 0 {
 		return
 	}

@@ -122,7 +122,7 @@ func (this *Visitercontrol) deleteExpiredOnce() {
 		if index < len(this.visitorRecords) && index >= 0 {
 			this.visitorRecords[index].DeleteExpired()
 			//某用户某段时间无访问记录时，删除该用户，并把剩余的空访问记录加入缓存记录池
-			if this.visitorRecords[index].Size() == 0 {
+			if this.visitorRecords[index].UsedSize() == 0 {
 				this.lock.Lock()
 				defer this.lock.Unlock()
 				this.indexes.Delete(k)
