@@ -68,6 +68,32 @@ func (this *Visitercontrol) AllowVisitIP(ip string) bool {
 	return this.AllowVisit(ipInt64)
 }
 
+//剩余访问次数
+func (this *Visitercontrol) RemainingVisits(key interface{}) int {
+	index, exist := this.indexes.Load(key)
+	//先前曾经有访问记录，则取剩余空间长度。若不存在，就取默认全部空间长度
+	if exist {
+		return this.visitorRecords[index.(int)].UnUsedSize()
+	} else {
+		if len(this.visitorRecords) > 0 {
+			//visitorRecords中任意一条均有代表性
+			return this.visitorRecords[0].Len()
+		} else {
+			//这个一般不存在，只是为了安全起见
+			return 0
+		}
+	}
+}
+
+//某IP剩余访问次数
+func (this *Visitercontrol) RemainingVisitsIP(ip string) int {
+	ipInt64 := this.Ip4StringToInt64(ip)
+	if ipInt64 == 0 {
+		return 0
+	}
+	return this.RemainingVisits(ipInt64)
+}
+
 //增加一条访问记录
 func (this *Visitercontrol) add(key interface{}) (err error) {
 	index, exist := this.indexes.Load(key)
