@@ -110,7 +110,6 @@ func (this *Visitercontrol) add(key interface{}) (err error) {
 	}
 	//visitorRecords没有空余空间时，则需要插入一条新数据到visitorRecords中
 	queue := newCircleQueueInt64(this.maxVisitsNum)
-	queue.Push(time.Now().Add(this.defaultExpiration).UnixNano())
 	this.visitorRecords = append(this.visitorRecords, queue)
 	index := len(this.visitorRecords) - 1 //最后一条的位置即为新的索引位置
 	this.indexes.Store(key, index)
