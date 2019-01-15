@@ -15,7 +15,7 @@ type Visitercontrol struct {
 	maximumNumberOfOnlineUsers int                 //单位时间最大用户数量，建议选用一个稍大于实际值的值，以减少内存分配次数
 	visitorRecords             []*circleQueueInt64 //存储用户访问记录
 	notUsedVisitorRecordsIndex *hashset.SetInt     //对应visitorRecords中未使用的数据的索引位置
-	lock                       *sync.RWMutex       //并发锁
+	lock                       *sync.Mutex         //锁
 }
 
 /*
@@ -27,39 +27,41 @@ vc := visitercontrol.New(time.Minute*30, time.Second*5, 50, 1000)
 并且我们预计同时在线用户数量大致在1000个左右。
 */
 func New(defaultExpiration, cleanupInterval time.Duration, maxVisitsNum, maximumNumberOfOnlineUsers int) *Visitercontrol {
-	this := new(defaultExpiration, cleanupInterval, maxVisitsNum, maximumNumberOfOnlineUsers)
-	go this.deleteExpired()
-	return this
+	vc := new(defaultExpiration, cleanupInterval, maxVisitsNum, maximumNumberOfOnlineUsers)
+	go vc.deleteExpired()
+	return vc
 }
 
 func new(defaultExpiration, cleanupInterval time.Duration, maxVisitsNum, maximumNumberOfOnlineUsers int) *Visitercontrol {
 	if cleanupInterval > defaultExpiration {
 		panic("每次清除访问记录的时间间隔(cleanupInterval)必须小于待统计数据时间段(defaultExpiration)")
 	}
-	var l Visitercontrol
-	var lock sync.RWMutex
-	l.defaultExpiration = defaultExpiration
-	l.cleanupInterval = cleanupInterval
-	l.maxVisitsNum = maxVisitsNum
-	l.maximumNumberOfOnlineUsers = maximumNumberOfOnlineUsers
-	l.notUsedVisitorRecordsIndex = hashset.NewInt()
-	l.lock = &lock
-	//初始化缓存池，减少内存分配，提升性能
-	l.visitorRecords = make([]*circleQueueInt64, l.maximumNumberOfOnlineUsers)
-	for i := range l.visitorRecords {
-		l.visitorRecords[i] = newCircleQueueInt64(l.maxVisitsNum)
-		l.notUsedVisitorRecordsIndex.Add(i)
+	var vc Visitercontrol
+	var lock sync.Mutex
+	vc.defaultExpiration = defaultExpiration
+	vc.cleanupInterval = cleanupInterval
+	vc.maxVisitsNum = maxVisitsNum
+	vc.maximumNumberOfOnlineUsers = maximumNumberOfOnlineUsers
+	vc.notUsedVisitorRecordsIndex = hashset.NewInt()
+	vc.lock = &lock
+	//根据在线用户数量初始化用户访问记录数据
+	vc.visitorRecords = make([]*circleQueueInt64, vc.maximumNumberOfOnlineUsers)
+	for i := range vc.visitorRecords {
+		vc.visitorRecords[i] = newCircleQueueInt64(vc.maxVisitsNum)
+		vc.notUsedVisitorRecordsIndex.Add(i)
 	}
-	return &l
+	return &vc
 
 }
 
 //是否允许访问,允许访问则往访问记录中加入一条访问记录
+//例: AllowVisit("usernameexample")
 func (this *Visitercontrol) AllowVisit(key interface{}) bool {
 	return this.add(key) == nil
 }
 
 //是否允许某IP的用户访问
+//例: AllowVisitIP("127.0.0.1")
 func (this *Visitercontrol) AllowVisitIP(ip string) bool {
 	ipInt64 := this.Ip4StringToInt64(ip)
 	if ipInt64 == 0 {
@@ -69,23 +71,18 @@ func (this *Visitercontrol) AllowVisitIP(ip string) bool {
 }
 
 //剩余访问次数
+//例: RemainingVisits("usernameexample")
 func (this *Visitercontrol) RemainingVisits(key interface{}) int {
-	index, exist := this.indexes.Load(key)
-	//先前曾经有访问记录，则取剩余空间长度。若不存在，就取默认全部空间长度
-	if exist {
+	//先前曾经有访问记录，则取剩余空间长度。
+	if index, exist := this.indexes.Load(key); exist {
 		return this.visitorRecords[index.(int)].UnUsedSize()
-	} else {
-		if len(this.visitorRecords) > 0 {
-			//visitorRecords中任意一条均有代表性
-			return this.visitorRecords[0].Len()
-		} else {
-			//这个一般不存在，只是为了安全起见
-			return 0
-		}
 	}
+	//若不存在，就取maxVisitsNum
+	return this.maxVisitsNum
 }
 
 //某IP剩余访问次数
+//例: RemainingVisitsIP("127.0.0.1")
 func (this *Visitercontrol) RemainingVisitsIP(ip string) int {
 	ipInt64 := this.Ip4StringToInt64(ip)
 	if ipInt64 == 0 {
@@ -96,45 +93,39 @@ func (this *Visitercontrol) RemainingVisitsIP(ip string) int {
 
 //增加一条访问记录
 func (this *Visitercontrol) add(key interface{}) (err error) {
-	index, exist := this.indexes.Load(key)
+	this.lock.Lock()
+	defer this.lock.Unlock()
 	//存在某访客，则在该访客记录中增加一条访问记录
-	if exist {
+	if index, exist := this.indexes.Load(key); exist {
 		return this.visitorRecords[index.(int)].Push(time.Now().Add(this.defaultExpiration).UnixNano())
-	} else {
-		//不存在该访客记录的时候
-		this.lock.RLock()
-		defer this.lock.RUnlock()
-		//有未使用的缓存时
-		if this.notUsedVisitorRecordsIndex.Size() > 0 {
-			for index := range this.notUsedVisitorRecordsIndex.Items {
-				this.visitorRecords[index].Push(time.Now().Add(this.defaultExpiration).UnixNano())
-				this.notUsedVisitorRecordsIndex.Remove(index)
-				//下标索引位置
-				this.indexes.Store(key, index)
-				break
-			}
-
-		} else {
-			//没有缓存可使用时
-			queue := newCircleQueueInt64(this.maxVisitsNum)
-			queue.Push(time.Now().Add(this.defaultExpiration).UnixNano())
-			this.visitorRecords = append(this.visitorRecords, queue)
-			//最后一条数据是下标索引位置
-			this.indexes.Store(key, len(this.visitorRecords)-1)
-		}
-		return nil
 	}
+	//该访客在这一段时间从来未出现过
+	//在visitorRecords中有未使用的空间时,根据notUsedVisitorRecordsIndex随机取一条出来使用
+	if this.notUsedVisitorRecordsIndex.Size() > 0 {
+		for index := range this.notUsedVisitorRecordsIndex.Items {
+			this.notUsedVisitorRecordsIndex.Remove(index)
+			this.indexes.Store(key, index)
+			return this.visitorRecords[index].Push(time.Now().Add(this.defaultExpiration).UnixNano())
+		}
+	}
+	//visitorRecords没有空余空间时，则需要插入一条新数据到visitorRecords中
+	queue := newCircleQueueInt64(this.maxVisitsNum)
+	queue.Push(time.Now().Add(this.defaultExpiration).UnixNano())
+	this.visitorRecords = append(this.visitorRecords, queue)
+	index := len(this.visitorRecords) - 1 //最后一条的位置即为新的索引位置
+	this.indexes.Store(key, index)
+	return this.visitorRecords[index].Push(time.Now().Add(this.defaultExpiration).UnixNano())
 }
 
 //删除过期数据
 func (this *Visitercontrol) deleteExpired() {
 	finished := true
 	for range time.Tick(this.cleanupInterval) {
-		//如果数据量较大，那么在一个清除周期内不一定会把所有数据全部清除
+		//如果数据量较大，那么在一个清除周期内不一定会把所有数据全部清除,所以要判断是否
 		if finished {
 			finished = false
 			this.deleteExpiredOnce()
-			this.gc()
+			this.gc() //回收空间
 			finished = true
 		}
 	}
@@ -143,21 +134,21 @@ func (this *Visitercontrol) deleteExpired() {
 //在特定时间间隔内执行一次删除过期数据操作
 func (this *Visitercontrol) deleteExpiredOnce() {
 	this.indexes.Range(func(k, v interface{}) bool {
+		this.lock.Lock() //range里面不能用defer
 		index := v.(int)
 		//防止越界出错，理论上不存在这种情况
 		if index < len(this.visitorRecords) && index >= 0 {
 			this.visitorRecords[index].DeleteExpired()
-			//某用户某段时间无访问记录时，删除该用户，并把剩余的空访问记录加入缓存记录池
+			//删除完过期数据之后，如果该用户的所有访问记录均过期了，那么就删除该用户
+			//并把该空间返还给notUsedVisitorRecordsIndex以便下次重复使用
 			if this.visitorRecords[index].UsedSize() == 0 {
-				this.lock.Lock()
-				defer this.lock.Unlock()
 				this.indexes.Delete(k)
 				this.notUsedVisitorRecordsIndex.Add(index)
 			}
 		} else {
 			this.indexes.Delete(k)
 		}
-
+		this.lock.Unlock()
 		return true
 	})
 }
@@ -172,7 +163,8 @@ func (this *Visitercontrol) Ip4StringToInt64(ip string) int64 {
 	return Ip4StringToInt64(ip)
 }
 
-//出现峰值之后，回收访问数据，减少内存占用
+//GC的目的在于，防止出现访问峰值之后，实际的访问峰值远大于我们假想的峰值maximumNumberOfOnlineUsers
+//之后用户数又大幅下降，这时候，为了减少内存占用，需要进行数据回收操作，重新分配空间。
 func (this *Visitercontrol) gc() {
 	this.lock.Lock()
 	defer this.lock.Unlock()
@@ -180,20 +172,21 @@ func (this *Visitercontrol) gc() {
 		curLen := len(this.visitorRecords)
 		unUsedLen := len(this.notUsedVisitorRecordsIndex.Items)
 		usedLen := curLen - unUsedLen
+		//算出新的visitorRecords长度
 		var newLen int
 		if usedLen < this.maximumNumberOfOnlineUsers {
 			newLen = this.maximumNumberOfOnlineUsers
 		} else {
 			newLen = usedLen * 2
 		}
-		//建立新缓存
+		//根据新长度，建立新的用户访问记录
 		visitorRecordsNew := make([]*circleQueueInt64, newLen)
 		for i := range visitorRecordsNew {
 			visitorRecordsNew[i] = newCircleQueueInt64(this.maxVisitsNum)
 		}
-		//清空未使用索引
+		//清空未使用索引notUsedVisitorRecordsIndex
 		this.notUsedVisitorRecordsIndex.Clear()
-		//重建索引
+		//重建索引indexes
 		indexNew := 0
 		this.indexes.Range(func(k, v interface{}) bool {
 			indexOld := v.(int)
@@ -202,7 +195,7 @@ func (this *Visitercontrol) gc() {
 			return true
 		})
 		this.visitorRecords = visitorRecordsNew
-		//重建未使用索引
+		//重建未使用索引notUsedVisitorRecordsIndex
 		for i := range this.visitorRecords {
 			if i >= indexNew {
 				this.notUsedVisitorRecordsIndex.Add(i)
