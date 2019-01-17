@@ -2,6 +2,7 @@ package visitercontrol
 
 import (
 	"encoding/json"
+	"fmt"
 	"sort"
 	"time"
 )
@@ -180,29 +181,30 @@ func (this *Visitercontrol) CurOnlineUserNum() int {
 }
 
 type printHelper struct {
-	ruleName                   string        //规则名称
-	defaultExpiration          time.Duration //每条访问记录需要保存的时长，也就是过期时间
-	cleanupInterval            time.Duration //多长时间需要执行一次清除操作
-	maxVisitsNum               int           //每个用户在相应时间段内最多允许访问的次数
-	maximumNumberOfOnlineUsers int           //预计的最大在线用户数
-	allUserInfos               []userInfo
+	RuleName                   string        //规则名称
+	DefaultExpiration          time.Duration //每条访问记录需要保存的时长，也就是过期时间
+	CleanupInterval            time.Duration //多长时间需要执行一次清除操作
+	MaxVisitsNum               int           //每个用户在相应时间段内最多允许访问的次数
+	MaximumNumberOfOnlineUsers int           //预计的最大在线用户数
+	CurOnlineUserNum           int
+	CurOnlineUserInfo          []userInfo
 }
 type userInfo struct {
-	userName        string //用户或IP
-	used            int    //已使用
-	remainingVisits int    //剩余访问次数
+	UserName        string //用户或IP
+	Used            int    //已使用
+	RemainingVisits int    //剩余访问次数
 
 }
 
-//输出JSON格式，方便观察
-func (this *Visitercontrol) Print() string {
+//把在线用户数据转化成JSON输出
+func (this *Visitercontrol) OnlineUserInfoToJson() string {
 	var p printHelper
-	p.ruleName = this.ruleName
-	p.defaultExpiration = this.defaultExpiration
-	p.cleanupInterval = this.cleanupInterval
-	p.maxVisitsNum = this.maxVisitsNum
-	p.maximumNumberOfOnlineUsers = this.maximumNumberOfOnlineUsers
-	var allUserInfos []userInfo
+	p.RuleName = this.ruleName
+	p.DefaultExpiration = this.defaultExpiration
+	p.CleanupInterval = this.cleanupInterval
+	p.MaxVisitsNum = this.maxVisitsNum
+	p.MaximumNumberOfOnlineUsers = this.maximumNumberOfOnlineUsers
+	var CurOnlineUserInfo []userInfo
 	this.indexes.Range(func(k, v interface{}) bool {
 		this.lock.Lock() //range里面不能用defer
 		index := v.(int)
@@ -217,10 +219,10 @@ func (this *Visitercontrol) Print() string {
 			} else {
 				//加入统计数据表
 				var u userInfo
-				u.userName = k.(string)
-				u.remainingVisits = this.visitorRecords[index].UnUsedSize()
-				u.used = this.visitorRecords[index].UsedSize()
-				allUserInfos = append(allUserInfos, u)
+				u.UserName = fmt.Sprint(k) //k.(string)
+				u.RemainingVisits = this.visitorRecords[index].UnUsedSize()
+				u.Used = this.visitorRecords[index].UsedSize()
+				CurOnlineUserInfo = append(CurOnlineUserInfo, u)
 			}
 		} else {
 			this.indexes.Delete(k)
@@ -228,11 +230,9 @@ func (this *Visitercontrol) Print() string {
 		this.lock.Unlock()
 		return true
 	})
-	sort.Slice(allUserInfos, func(i int, j int) bool { return allUserInfos[i].userName < allUserInfos[j].userName })
-	p.allUserInfos = allUserInfos
-	b, err := json.Marshal(p)
-	if err != nil {
-		return ""
-	}
+	sort.Slice(CurOnlineUserInfo, func(i int, j int) bool { return CurOnlineUserInfo[i].UserName < CurOnlineUserInfo[j].UserName })
+	p.CurOnlineUserInfo = CurOnlineUserInfo
+	p.CurOnlineUserNum = len(p.CurOnlineUserInfo)
+	b, _ := json.Marshal(p)
 	return string(b)
 }
