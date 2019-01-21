@@ -3,9 +3,65 @@ package visitercontrol
 import (
 	"encoding/json"
 	"fmt"
+	"github.com/yudeguang/hashset"
 	"sort"
+	"sync"
 	"time"
 )
+
+//某单位时间内允许多少次访问
+type Visitercontrol struct {
+	ruleName                     string              //规则名称
+	defaultExpiration            time.Duration       //每条访问记录需要保存的时长，也就是过期时间
+	cleanupInterval              time.Duration       //默认多长时间需要执行一次清除操作
+	numberOfAllowedAccesses      int                 //每个用户在相应时间段内最多允许访问的次数
+	estimatedNumberOfOnlineUsers int                 //单位时间内预计有多少个用户会访问网站，建议选用一个稍大于实际值的值，以减少内存分配次数
+	indexes                      sync.Map            //索引：key代表用户名或IP；value代表visitorRecords中的索引位置
+	visitorRecords               []*circleQueueInt64 //存储用户访问记录
+	notUsedVisitorRecordsIndex   *hashset.SetInt     //对应visitorRecords中未使用的数据的索引位置
+	lock                         *sync.Mutex         //锁
+}
+
+/*
+初始化
+例：
+vc := visitercontrol.New("every 30 minute",time.Minute*30, 50, 1000)
+它表示:
+在30分钟内每个用户最多允许访问50次,并且我们预计在这30分钟内大致有1000个用户会访问我们的网站
+*/
+func New(ruleName string, defaultExpiration time.Duration, numberOfAllowedAccesses, estimatedNumberOfOnlineUsers int) *Visitercontrol {
+	//设立默认清除过期数据的间隔。设立此数据的目的是在于防止用户数量无限增长，并减少内存占用。
+	cleanupInterval := defaultExpiration / 100
+	if cleanupInterval < time.Nanosecond*1 {
+		cleanupInterval = time.Nanosecond * 1
+	}
+	vc := createVisitercontrol(ruleName, defaultExpiration, cleanupInterval, numberOfAllowedAccesses, estimatedNumberOfOnlineUsers)
+	go vc.deleteExpired()
+	return vc
+}
+
+func createVisitercontrol(ruleName string, defaultExpiration, cleanupInterval time.Duration, numberOfAllowedAccesses, estimatedNumberOfOnlineUsers int) *Visitercontrol {
+	if numberOfAllowedAccesses < 0 || estimatedNumberOfOnlineUsers > 0 {
+		panic("numberOfAllowedAccesses and estimatedNumberOfOnlineUsers must>0")
+	}
+	var vc Visitercontrol
+	var lock sync.Mutex
+	vc.ruleName = ruleName
+	vc.defaultExpiration = defaultExpiration
+	vc.cleanupInterval = cleanupInterval
+	vc.numberOfAllowedAccesses = numberOfAllowedAccesses
+	vc.estimatedNumberOfOnlineUsers = estimatedNumberOfOnlineUsers
+	vc.notUsedVisitorRecordsIndex = hashset.NewInt()
+	vc.lock = &lock
+	//根据在线用户数量初始化用户访问记录数据
+	vc.visitorRecords = make([]*circleQueueInt64, vc.estimatedNumberOfOnlineUsers)
+	for i := range vc.visitorRecords {
+		vc.visitorRecords[i] = newCircleQueueInt64(vc.numberOfAllowedAccesses)
+		vc.notUsedVisitorRecordsIndex.Add(i)
+	}
+	return &vc
+
+}
 
 //是否允许访问,允许访问则往访问记录中加入一条访问记录
 //例: AllowVisit("usernameexample")
@@ -28,10 +84,11 @@ func (this *Visitercontrol) AllowVisitIP(ip string) bool {
 func (this *Visitercontrol) RemainingVisits(key interface{}) int {
 	//先前曾经有访问记录，则取剩余空间长度。
 	if index, exist := this.indexes.Load(key); exist {
+		this.visitorRecords[index.(int)].DeleteExpired()
 		return this.visitorRecords[index.(int)].UnUsedSize()
 	}
-	//若不存在，就取maxVisitsNum
-	return this.maxVisitsNum
+	//若不存在，就取numberOfAllowedAccesses
+	return this.numberOfAllowedAccesses
 }
 
 //某IP剩余访问次数
@@ -50,6 +107,7 @@ func (this *Visitercontrol) add(key interface{}) (err error) {
 	defer this.lock.Unlock()
 	//存在某访客，则在该访客记录中增加一条访问记录
 	if index, exist := this.indexes.Load(key); exist {
+		this.visitorRecords[index.(int)].DeleteExpired()
 		return this.visitorRecords[index.(int)].Push(time.Now().Add(this.defaultExpiration).UnixNano())
 	}
 	//该访客在这一段时间从来未出现过
@@ -62,7 +120,7 @@ func (this *Visitercontrol) add(key interface{}) (err error) {
 		}
 	}
 	//visitorRecords没有空余空间时，则需要插入一条新数据到visitorRecords中
-	queue := newCircleQueueInt64(this.maxVisitsNum)
+	queue := newCircleQueueInt64(this.numberOfAllowedAccesses)
 	this.visitorRecords = append(this.visitorRecords, queue)
 	index := len(this.visitorRecords) - 1 //最后一条的位置即为新的索引位置
 	this.indexes.Store(key, index)
@@ -73,7 +131,7 @@ func (this *Visitercontrol) add(key interface{}) (err error) {
 func (this *Visitercontrol) deleteExpired() {
 	finished := true
 	for range time.Tick(this.cleanupInterval) {
-		//如果数据量较大，那么在一个清除周期内不一定会把所有数据全部清除,所以要判断是否
+		//如果数据量较大，那么在一个清除周期内不一定会把所有数据全部清除,所以要判断上一轮次的清除是否完成
 		if finished {
 			finished = false
 			this.deleteExpiredOnce()
@@ -115,7 +173,7 @@ func (this *Visitercontrol) Ip4StringToInt64(ip string) int64 {
 	return Ip4StringToInt64(ip)
 }
 
-//GC的目的在于，防止出现访问峰值之后，实际的访问峰值远大于我们假想的峰值maximumNumberOfOnlineUsers
+//GC的目的在于，防止出现访问峰值之后，实际的访问峰值远大于我们假想的峰值estimatedNumberOfOnlineUsers
 //之后用户数又大幅下降，这时候，为了减少内存占用，需要进行数据回收操作，重新分配空间。
 func (this *Visitercontrol) gc() {
 	this.lock.Lock()
@@ -126,15 +184,15 @@ func (this *Visitercontrol) gc() {
 		usedLen := curLen - unUsedLen
 		//算出新的visitorRecords长度
 		var newLen int
-		if usedLen < this.maximumNumberOfOnlineUsers {
-			newLen = this.maximumNumberOfOnlineUsers
+		if usedLen < this.estimatedNumberOfOnlineUsers {
+			newLen = this.estimatedNumberOfOnlineUsers
 		} else {
 			newLen = usedLen * 2
 		}
 		//根据新长度，建立新的用户访问记录
 		visitorRecordsNew := make([]*circleQueueInt64, newLen)
 		for i := range visitorRecordsNew {
-			visitorRecordsNew[i] = newCircleQueueInt64(this.maxVisitsNum)
+			visitorRecordsNew[i] = newCircleQueueInt64(this.numberOfAllowedAccesses)
 		}
 		//清空未使用索引notUsedVisitorRecordsIndex
 		this.notUsedVisitorRecordsIndex.Clear()
@@ -165,7 +223,7 @@ func (this *Visitercontrol) needGc() bool {
 	usedLen := curLen - unUsedLen
 	//log.Println("总:", curLen, "已用:", usedLen, "未使用:", unUsedLen)
 	//比预期的少，我们就不回收了
-	if curLen < 2*this.maximumNumberOfOnlineUsers {
+	if curLen < 2*this.estimatedNumberOfOnlineUsers {
 		return false
 	}
 	//未使用的太多，则需要回收
@@ -177,17 +235,18 @@ func (this *Visitercontrol) needGc() bool {
 
 //当前在线用户总数
 func (this *Visitercontrol) CurOnlineUserNum() int {
+	this.deleteExpiredOnce()
 	return len(this.visitorRecords) - len(this.notUsedVisitorRecordsIndex.Items)
 }
 
 type printHelper struct {
-	RuleName                   string        //规则名称
-	DefaultExpiration          time.Duration //每条访问记录需要保存的时长，也就是过期时间
-	CleanupInterval            time.Duration //多长时间需要执行一次清除操作
-	MaxVisitsNum               int           //每个用户在相应时间段内最多允许访问的次数
-	MaximumNumberOfOnlineUsers int           //预计的最大在线用户数
-	CurOnlineUserNum           int
-	CurOnlineUserInfo          []userInfo
+	RuleName                     string        //规则名称
+	DefaultExpiration            time.Duration //每条访问记录需要保存的时长，也就是过期时间
+	CleanupInterval              time.Duration //多长时间需要执行一次清除操作
+	numberOfAllowedAccesses      int           //每个用户在相应时间段内最多允许访问的次数
+	estimatedNumberOfOnlineUsers int           //预计的最大在线用户数
+	CurOnlineUserNum             int
+	CurOnlineUserInfo            []userInfo
 }
 type userInfo struct {
 	UserName        string //用户或IP
@@ -202,8 +261,8 @@ func (this *Visitercontrol) OnlineUserInfoToJson() string {
 	p.RuleName = this.ruleName
 	p.DefaultExpiration = this.defaultExpiration
 	p.CleanupInterval = this.cleanupInterval
-	p.MaxVisitsNum = this.maxVisitsNum
-	p.MaximumNumberOfOnlineUsers = this.maximumNumberOfOnlineUsers
+	p.numberOfAllowedAccesses = this.numberOfAllowedAccesses
+	p.estimatedNumberOfOnlineUsers = this.estimatedNumberOfOnlineUsers
 	var CurOnlineUserInfo []userInfo
 	this.indexes.Range(func(k, v interface{}) bool {
 		this.lock.Lock() //range里面不能用defer
