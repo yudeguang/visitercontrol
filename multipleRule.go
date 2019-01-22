@@ -40,6 +40,9 @@ func NewMultipleVisitercontrol(multipleRule ...Rule) *MultipleVisitercontrol {
 //是否允许访问,允许访问则往访问记录中加入一条访问记录
 //例: AllowVisit("usernameexample")
 func (this *MultipleVisitercontrol) AllowVisit(key interface{}) bool {
+	//这个地方需要注意，如果前面的某些策略通过，但是后面的策略不通过。这时候，在前面允许访问的策略中，
+	//允许访问次数同样是会减少的,我们这里并没有严格的做回滚操作。原因在于，一方面是性能，另外一方面是随着
+	//时间流逝，前面的策略中允许访问的次数很快就会自动增长。
 	for i := range this.multipleVisitercontrol {
 		if err := this.multipleVisitercontrol[i].add(key); err != nil {
 			return false

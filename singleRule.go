@@ -29,6 +29,10 @@ vc := NewSingleVisitercontrol(time.Minute*30, 50, 1000)
 在30分钟内每个用户最多允许访问50次,并且我们预计在这30分钟内大致有1000个用户会访问我们的网站
 */
 func NewSingleVisitercontrol(defaultExpiration time.Duration, numberOfAllowedAccesses, estimatedNumberOfOnlineUsers int) *SingleVisitercontrol {
+	//对于默认过期时间defaultExpiration,如果小于1秒，从效率的角度讲，
+	//整个算法实际上可以衰退为令牌桶算法golang.org/x/time/rate,以应
+	//对超高并发的情况，在此并不实现。
+
 	//设立默认清除过期数据的间隔。设立此数据的目的是在于防止用户数量无限增长，并减少内存占用。
 	cleanupInterval := defaultExpiration / 100
 	if cleanupInterval < time.Nanosecond*1 {
