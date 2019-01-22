@@ -10,7 +10,7 @@ import (
 )
 
 //某单位时间内允许多少次访问
-type Visitercontrol struct {
+type SingleVisitercontrol struct {
 	defaultExpiration            time.Duration       //每条访问记录需要保存的时长，也就是过期时间
 	cleanupInterval              time.Duration       //默认多长时间需要执行一次清除操作
 	numberOfAllowedAccesses      int                 //每个用户在相应时间段内最多允许访问的次数
@@ -22,28 +22,28 @@ type Visitercontrol struct {
 }
 
 /*
-初始化
+初始化一个单规则频率控制策略
 例：
-vc := visitercontrol.New(time.Minute*30, 50, 1000)
+vc := NewSingleVisitercontrol(time.Minute*30, 50, 1000)
 它表示:
 在30分钟内每个用户最多允许访问50次,并且我们预计在这30分钟内大致有1000个用户会访问我们的网站
 */
-func New(defaultExpiration time.Duration, numberOfAllowedAccesses, estimatedNumberOfOnlineUsers int) *Visitercontrol {
+func NewSingleVisitercontrol(defaultExpiration time.Duration, numberOfAllowedAccesses, estimatedNumberOfOnlineUsers int) *SingleVisitercontrol {
 	//设立默认清除过期数据的间隔。设立此数据的目的是在于防止用户数量无限增长，并减少内存占用。
 	cleanupInterval := defaultExpiration / 100
 	if cleanupInterval < time.Nanosecond*1 {
 		cleanupInterval = time.Nanosecond * 1
 	}
-	vc := createVisitercontrol(defaultExpiration, cleanupInterval, numberOfAllowedAccesses, estimatedNumberOfOnlineUsers)
+	vc := createSingleVisitercontrol(defaultExpiration, cleanupInterval, numberOfAllowedAccesses, estimatedNumberOfOnlineUsers)
 	go vc.deleteExpired()
 	return vc
 }
 
-func createVisitercontrol(defaultExpiration, cleanupInterval time.Duration, numberOfAllowedAccesses, estimatedNumberOfOnlineUsers int) *Visitercontrol {
+func createSingleVisitercontrol(defaultExpiration, cleanupInterval time.Duration, numberOfAllowedAccesses, estimatedNumberOfOnlineUsers int) *SingleVisitercontrol {
 	if numberOfAllowedAccesses < 0 || estimatedNumberOfOnlineUsers > 0 {
 		panic("numberOfAllowedAccesses and estimatedNumberOfOnlineUsers must>0")
 	}
-	var vc Visitercontrol
+	var vc SingleVisitercontrol
 	var lock sync.Mutex
 	vc.defaultExpiration = defaultExpiration
 	vc.cleanupInterval = cleanupInterval
@@ -63,14 +63,14 @@ func createVisitercontrol(defaultExpiration, cleanupInterval time.Duration, numb
 
 //是否允许访问,允许访问则往访问记录中加入一条访问记录
 //例: AllowVisit("usernameexample")
-func (this *Visitercontrol) AllowVisit(key interface{}) bool {
+func (this *SingleVisitercontrol) AllowVisit(key interface{}) bool {
 	return this.add(key) == nil
 }
 
 //是否允许某IP的用户访问
 //例: AllowVisitIP("127.0.0.1")
-func (this *Visitercontrol) AllowVisitIP(ip string) bool {
-	ipInt64 := this.Ip4StringToInt64(ip)
+func (this *SingleVisitercontrol) AllowVisitIP(ip string) bool {
+	ipInt64 := Ip4StringToInt64(ip)
 	if ipInt64 == 0 {
 		return false
 	}
@@ -79,7 +79,7 @@ func (this *Visitercontrol) AllowVisitIP(ip string) bool {
 
 //剩余访问次数
 //例: RemainingVisits("usernameexample")
-func (this *Visitercontrol) RemainingVisits(key interface{}) int {
+func (this *SingleVisitercontrol) RemainingVisits(key interface{}) int {
 	//先前曾经有访问记录，则取剩余空间长度。
 	if index, exist := this.indexes.Load(key); exist {
 		this.visitorRecords[index.(int)].DeleteExpired()
@@ -91,8 +91,8 @@ func (this *Visitercontrol) RemainingVisits(key interface{}) int {
 
 //某IP剩余访问次数
 //例: RemainingVisitsIP("127.0.0.1")
-func (this *Visitercontrol) RemainingVisitsIP(ip string) int {
-	ipInt64 := this.Ip4StringToInt64(ip)
+func (this *SingleVisitercontrol) RemainingVisitsIP(ip string) int {
+	ipInt64 := Ip4StringToInt64(ip)
 	if ipInt64 == 0 {
 		return 0
 	}
@@ -100,7 +100,7 @@ func (this *Visitercontrol) RemainingVisitsIP(ip string) int {
 }
 
 //增加一条访问记录
-func (this *Visitercontrol) add(key interface{}) (err error) {
+func (this *SingleVisitercontrol) add(key interface{}) (err error) {
 	this.lock.Lock()
 	defer this.lock.Unlock()
 	//存在某访客，则在该访客记录中增加一条访问记录
@@ -126,7 +126,7 @@ func (this *Visitercontrol) add(key interface{}) (err error) {
 }
 
 //删除过期数据
-func (this *Visitercontrol) deleteExpired() {
+func (this *SingleVisitercontrol) deleteExpired() {
 	finished := true
 	for range time.Tick(this.cleanupInterval) {
 		//如果数据量较大，那么在一个清除周期内不一定会把所有数据全部清除,所以要判断上一轮次的清除是否完成
@@ -140,7 +140,7 @@ func (this *Visitercontrol) deleteExpired() {
 }
 
 //在特定时间间隔内执行一次删除过期数据操作
-func (this *Visitercontrol) deleteExpiredOnce() {
+func (this *SingleVisitercontrol) deleteExpiredOnce() {
 	this.indexes.Range(func(k, v interface{}) bool {
 		this.lock.Lock() //range里面不能用defer
 		index := v.(int)
@@ -161,19 +161,9 @@ func (this *Visitercontrol) deleteExpiredOnce() {
 	})
 }
 
-//把Int64转换成IP4的的字符串形式
-func (this *Visitercontrol) Int64ToIp4String(ip int64) string {
-	return Int64ToIp4String(ip)
-}
-
-//IP4地址转换为Int64
-func (this *Visitercontrol) Ip4StringToInt64(ip string) int64 {
-	return Ip4StringToInt64(ip)
-}
-
 //GC的目的在于，防止出现访问峰值之后，实际的访问峰值远大于我们假想的峰值estimatedNumberOfOnlineUsers
 //之后用户数又大幅下降，这时候，为了减少内存占用，需要进行数据回收操作，重新分配空间。
-func (this *Visitercontrol) gc() {
+func (this *SingleVisitercontrol) gc() {
 	this.lock.Lock()
 	defer this.lock.Unlock()
 	if this.needGc() {
@@ -215,7 +205,7 @@ func (this *Visitercontrol) gc() {
 //是否需要对visitorRecords进行清理
 //如果visitorRecords数据空的太多,则需要进行清理操作
 //并且长度远大于默认在线用户数量，则需要进行GC操作
-func (this *Visitercontrol) needGc() bool {
+func (this *SingleVisitercontrol) needGc() bool {
 	curLen := len(this.visitorRecords)
 	unUsedLen := len(this.notUsedVisitorRecordsIndex.Items)
 	usedLen := curLen - unUsedLen
@@ -232,7 +222,7 @@ func (this *Visitercontrol) needGc() bool {
 }
 
 //当前在线用户总数
-func (this *Visitercontrol) CurOnlineUserNum() int {
+func (this *SingleVisitercontrol) CurOnlineUserNum() int {
 	this.deleteExpiredOnce()
 	return len(this.visitorRecords) - len(this.notUsedVisitorRecordsIndex.Items)
 }
@@ -252,7 +242,7 @@ type userInfo struct {
 }
 
 //把在线用户数据转化成JSON输出
-func (this *Visitercontrol) OnlineUserInfoToJson() string {
+func (this *SingleVisitercontrol) OnlineUserInfoToJson() string {
 	var p printHelper
 	p.DefaultExpiration = this.defaultExpiration.String()
 	p.NumberOfAllowedAccesses = this.numberOfAllowedAccesses
