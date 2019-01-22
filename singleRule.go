@@ -40,7 +40,7 @@ func NewSingleVisitercontrol(defaultExpiration time.Duration, numberOfAllowedAcc
 }
 
 func createSingleVisitercontrol(defaultExpiration, cleanupInterval time.Duration, numberOfAllowedAccesses, estimatedNumberOfOnlineUsers int) *SingleVisitercontrol {
-	if numberOfAllowedAccesses < 0 || estimatedNumberOfOnlineUsers > 0 {
+	if numberOfAllowedAccesses < 0 || estimatedNumberOfOnlineUsers < 0 {
 		panic("numberOfAllowedAccesses and estimatedNumberOfOnlineUsers must>0")
 	}
 	var vc SingleVisitercontrol

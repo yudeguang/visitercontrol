@@ -7,6 +7,7 @@ import (
 	"time"
 )
 
+//用于NewMultipleVisitercontrol函数的初始化
 type Rule struct {
 	DefaultExpiration            time.Duration
 	NumberOfAllowedAccesses      int
@@ -109,7 +110,7 @@ func (this *MultipleVisitercontrol) OnlineUserInfoToJson() string {
 				} else {
 					//加入统计数据表
 					var u userInfo
-					u.UserName = fmt.Sprint(k) //k.(string)
+					u.UserName = fmt.Sprint(k)
 					u.RemainingVisits = this.multipleVisitercontrol[i].visitorRecords[index].UnUsedSize()
 					u.Used = this.multipleVisitercontrol[i].visitorRecords[index].UsedSize()
 					CurOnlineUserInfo = append(CurOnlineUserInfo, u)
